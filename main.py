@@ -6,22 +6,25 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
-def scrape_page(url):
-    """
-    Récupère les emails, sociétés et postes depuis une page web.
-    """
+# Fonction pour scraper les données
+def fetch_emails_and_announcements(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        lines = soup.get_text(separator="\n").split("\n")
+
+        all_text = soup.get_text(separator="\n")
+        lines = all_text.split("\n")
 
         data = []
         email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-        current_offer, current_post = None, None
+
+        current_offer = None
+        current_post = None
 
         for line in lines:
             line = line.strip()
+
             if re.search(email_pattern, line):
                 email = re.search(email_pattern, line).group()
                 data.append([current_offer, current_post, email])
@@ -30,38 +33,25 @@ def scrape_page(url):
                     current_offer = line
                 else:
                     current_post = line
-        return data
-    except Exception as e:
-        print(f"Erreur lors du scraping de la page : {e}")
-        return []
 
-def scrape_multiple_pages(base_url, total_pages):
-    """
-    Récupère les données de plusieurs pages.
-    """
-    all_data = []
-    for page in range(1, total_pages + 1):
-        url = f"{base_url}&pageNum_Re_av={page}"
-        print(f"Scraping page : {url}")
-        all_data.extend(scrape_page(url))
-    return all_data
+        df = pd.DataFrame(data, columns=["Société", "Poste", "Email"])
+        return df
 
+    except requests.exceptions.RequestException as e:
+        print(f"Erreur lors de la récupération de la page : {e}")
+        return pd.DataFrame()
+
+# Création de l'application Dash
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
-    html.H1("Scraper d'Emails - Multipage", className="text-center my-4"),
+    html.H1("Scraper d'Emails depuis une URL", className="text-center my-4"),
     dbc.Row([
         dbc.Col([
             dcc.Input(
                 id="url-input",
                 type="url",
-                placeholder="Entrez l'URL de base",
-                className="form-control mb-3"
-            ),
-            dcc.Input(
-                id="total-pages",
-                type="number",
-                placeholder="Nombre total de pages",
+                placeholder="Entrez l'URL à scraper",
                 className="form-control mb-3"
             ),
             dbc.Button("Scraper", id="scrape-button", color="primary", className="mb-3"),
@@ -80,24 +70,27 @@ app.layout = dbc.Container([
     Output("download-dataframe-xlsx", "data"),
     Input("scrape-button", "n_clicks"),
     State("url-input", "value"),
-    State("total-pages", "value"),
     prevent_initial_call=True
 )
-def scrape_and_download(n_clicks, base_url, total_pages):
-    if not base_url or not total_pages:
-        return "Veuillez entrer une URL valide et le nombre total de pages.", dash.no_update
-    all_data = scrape_multiple_pages(base_url, total_pages)
-    if not all_data:
-        return "Aucune donnée extraite.", dash.no_update
-    df = pd.DataFrame(all_data, columns=["Société", "Poste", "Email"])
-    output_file = "announcements_multipage.xlsx"
+def scrape_and_download(n_clicks, url):
+    if not url:
+        return "Veuillez entrer une URL valide.", dash.no_update
+
+    df = fetch_emails_and_announcements(url)
+    if df.empty:
+        return "Aucune donnée extraite. Vérifiez l'URL ou le contenu de la page.", dash.no_update
+
+    output_file = "announcements.xlsx"
     df.to_excel(output_file, index=False)
+
     return (
         f"Extraction réussie ! {len(df)} lignes trouvées.",
         dcc.send_file(output_file)
     )
 
+# Exposer le serveur pour Gunicorn
 server = app.server
 
 if __name__ == "__main__":
     app.run_server(debug=True)
+    
